@@ -28,11 +28,15 @@ class ResticError(RuntimeError):
 
 
 class WrongPasswordError(ResticError):
-    """restic meldet wrong password / unable to open config."""
+    """restic meldet wrong password / no key found (Exit-Code 12)."""
+
+
+class RepoNotInitializedError(ResticError):
+    """Das Repository existiert nicht oder hat keinen config (Exit-Code 10)."""
 
 
 class RepoLockedError(ResticError):
-    """Repo ist durch einen anderen Prozess gesperrt."""
+    """Repo ist durch einen anderen Prozess gesperrt (Exit-Code 11)."""
 
 
 @dataclass(frozen=True)
@@ -72,14 +76,25 @@ class ForgetPolicy:
 
 
 def _classify_error(returncode: int, stderr: str) -> ResticError:
+    """Mappt restic-Fehler auf typisierte Exceptions.
+
+    Wir verlassen uns primär auf die Exit-Codes (10/11/12), die restic
+    dokumentiert, und nutzen Stderr-Strings nur als Fallback.
+    """
     text = stderr.lower()
-    if "wrong password" in text or "unable to open config" in text:
+    if returncode == 12 or "wrong password" in text or "no key found" in text:
         return WrongPasswordError(
-            f"Falsches Passwort oder beschädigtes Repo (rc={returncode})",
+            f"Falsches Passwort (rc={returncode})",
             returncode=returncode,
             stderr=stderr,
         )
-    if "unable to create lock" in text or "repository is already locked" in text:
+    if returncode == 10 or "repository does not exist" in text:
+        return RepoNotInitializedError(
+            f"Repository existiert nicht (rc={returncode})",
+            returncode=returncode,
+            stderr=stderr,
+        )
+    if returncode == 11 or "unable to create lock" in text or "already locked" in text:
         return RepoLockedError(
             f"Repository ist gesperrt (rc={returncode})",
             returncode=returncode,
@@ -142,13 +157,18 @@ class ResticRunner:
         log.info("Repository initialisiert: %s", self.repo.url)
 
     def is_initialized(self) -> bool:
-        """Prüft per `restic snapshots`, ob das Repo nutzbar ist."""
+        """Prüft per `restic snapshots`, ob das Repo nutzbar ist.
+
+        Wirft WrongPasswordError weiter (sodass der Aufrufer den
+        Keyring-Eintrag verwerfen kann). Bei fehlendem Repo gibt False
+        zurück.
+        """
         try:
             self._run(["snapshots", "--json"], timeout=30)
             return True
         except WrongPasswordError:
             raise
-        except ResticError:
+        except RepoNotInitializedError:
             return False
 
     def snapshots(self) -> list[Snapshot]:

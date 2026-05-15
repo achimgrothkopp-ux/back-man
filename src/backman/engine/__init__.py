@@ -3,6 +3,8 @@
 from .progress import ProgressEvent, SummaryEvent, parse_progress_lines
 from .repo import Repository, local_repo, sftp_repo
 from .restic import (
+    RepoLockedError,
+    RepoNotInitializedError,
     ResticError,
     ResticRunner,
     Snapshot,
@@ -11,6 +13,8 @@ from .restic import (
 
 __all__ = [
     "ProgressEvent",
+    "RepoLockedError",
+    "RepoNotInitializedError",
     "Repository",
     "ResticError",
     "ResticRunner",

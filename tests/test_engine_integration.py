@@ -12,6 +12,7 @@ import pytest
 
 from backman.engine import (
     ProgressEvent,
+    RepoNotInitializedError,
     ResticError,
     ResticRunner,
     SummaryEvent,
@@ -133,3 +134,25 @@ def test_backup_without_sources_raises(runner):
     runner.init()
     with pytest.raises(ValueError):
         runner.backup([])
+
+
+def test_is_initialized_false_for_missing_repo(tmp_path):
+    """Repo gibt's gar nicht — is_initialized() muss False liefern,
+    NICHT WrongPasswordError werfen (das war ein realer Bug, siehe
+    GUI-Report 2026-05-15)."""
+    runner = ResticRunner(local_repo(tmp_path / "kein-repo"), password="x")
+    assert runner.is_initialized() is False
+
+
+def test_snapshots_on_missing_repo_raises_not_initialized(tmp_path):
+    runner = ResticRunner(local_repo(tmp_path / "ghost"), password="x")
+    with pytest.raises(RepoNotInitializedError):
+        runner.snapshots()
+
+
+def test_wrong_password_still_distinct_from_missing(tmp_path):
+    repo = tmp_path / "repo"
+    ResticRunner(local_repo(repo), password="right").init()
+    bad = ResticRunner(local_repo(repo), password="wrong")
+    with pytest.raises(WrongPasswordError):
+        bad.is_initialized()

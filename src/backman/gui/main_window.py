@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import APP_DISPLAY_NAME, __version__
-from ..config import AppConfig, Job, LocalTarget, load_config, save_config
+from ..config import AppConfig, Job, LocalTarget, ScheduleKind, load_config, save_config
 from ..engine import (
     ProgressEvent,
     ResticRunner,
@@ -36,6 +36,18 @@ from ..engine import (
 )
 from ..logging_setup import GuiLogQueue
 from ..paths import AppPaths
+from ..scheduler import (
+    SystemctlError,
+    daemon_reload,
+    disable_timer,
+    enable_timer,
+    is_systemctl_available,
+    job_unit_basename,
+    remove_units,
+    show_timer_status,
+    write_units,
+)
+from ..scheduler.systemctl import TimerStatus
 from .backup_worker import BackupWorker
 from .engine_task_worker import EngineTaskWorker
 from .job_editor import JobEditorDialog
@@ -131,6 +143,21 @@ class MainWindow(QMainWindow):
         actions_row.addWidget(self._run_btn)
         actions_row.addStretch(1)
         r.addLayout(actions_row)
+
+        # Schedule-Status-Sektion
+        self._schedule_status_label = QLabel("Kein Job ausgewählt.")
+        self._schedule_status_label.setTextFormat(Qt.TextFormat.RichText)
+        self._schedule_status_label.setWordWrap(True)
+        r.addWidget(self._schedule_status_label)
+
+        sched_btns = QHBoxLayout()
+        self._refresh_schedule_btn = QPushButton("Timer-Status aktualisieren")
+        self._refresh_schedule_btn.clicked.connect(self._refresh_schedule_status)
+        self._refresh_schedule_btn.setEnabled(False)
+        sched_btns.addWidget(self._refresh_schedule_btn)
+        sched_btns.addStretch(1)
+        r.addLayout(sched_btns)
+
         r.addStretch(1)
         return widget
 
@@ -164,12 +191,16 @@ class MainWindow(QMainWindow):
         if current is None:
             self._current_job = None
             self._detail_label.setText("Kein Job ausgewählt.")
+            self._schedule_status_label.setText("Kein Job ausgewählt.")
+            self._refresh_schedule_btn.setEnabled(False)
             self._run_btn.setEnabled(False)
             self._snapshots_panel.clear()
             return
         job_id = current.data(Qt.ItemDataRole.UserRole)
         self._current_job = self._config.get_job(job_id)
         self._render_details()
+        self._refresh_schedule_status()
+        self._refresh_schedule_btn.setEnabled(self._current_job is not None)
         self._snapshots_panel.clear()
         self._run_btn.setEnabled(self._current_job is not None and not self._is_busy())
 
@@ -178,14 +209,68 @@ class MainWindow(QMainWindow):
             self._detail_label.setText("")
             return
         j = self._current_job
+        retention_summary = self._format_retention_summary(j)
         text = (
             f"<b>{j.name}</b><br>"
             f"<b>Ziel:</b> {j.target.path}<br>"
             f"<b>Quellen:</b><br>&nbsp;&nbsp;" + "<br>&nbsp;&nbsp;".join(j.sources) + "<br>"
             f"<b>Tags:</b> {', '.join(j.tags) or '—'}<br>"
-            f"<b>Excludes:</b> {', '.join(j.excludes) or '—'}"
+            f"<b>Excludes:</b> {', '.join(j.excludes) or '—'}<br>"
+            f"<b>Aufbewahrung:</b> {retention_summary}"
         )
         self._detail_label.setText(text)
+
+    @staticmethod
+    def _format_retention_summary(j: Job) -> str:
+        if not j.retention.is_active():
+            return "keine (Snapshots werden nicht automatisch entfernt)"
+        bits = []
+        for label, val in (
+            ("last", j.retention.keep_last),
+            ("daily", j.retention.keep_daily),
+            ("weekly", j.retention.keep_weekly),
+            ("monthly", j.retention.keep_monthly),
+            ("yearly", j.retention.keep_yearly),
+        ):
+            if val > 0:
+                bits.append(f"{label}={val}")
+        suffix = " (Auto-Prune AN)" if j.auto_prune else " (Auto-Prune aus)"
+        return ", ".join(bits) + suffix
+
+    @staticmethod
+    def _format_timer_status(j: Job, status: TimerStatus) -> str:
+        on_cal = j.schedule.to_on_calendar()
+        if on_cal is None:
+            return "<b>Zeitplan:</b> Manuell (kein systemd-Timer)"
+        parts = [f"<b>Zeitplan:</b> {on_cal}"]
+        if not is_systemctl_available():
+            parts.append("<i>(systemctl nicht gefunden — Timer-Status nicht verfügbar)</i>")
+            return "<br>".join(parts)
+        parts.append(
+            f"Timer enabled: {'ja' if status.enabled else 'nein'}, "
+            f"aktiv: {'ja' if status.active else 'nein'}"
+        )
+        if status.next_run is not None:
+            parts.append(f"Nächster Lauf: {status.next_run.strftime('%Y-%m-%d %H:%M:%S')}")
+        else:
+            parts.append("Nächster Lauf: —")
+        if status.last_run is not None:
+            res = status.last_result or "?"
+            parts.append(
+                f"Letzter Lauf: {status.last_run.strftime('%Y-%m-%d %H:%M:%S')} ({res})"
+            )
+        else:
+            parts.append("Letzter Lauf: noch nie")
+        return "<br>".join(parts)
+
+    def _refresh_schedule_status(self) -> None:
+        if not self._current_job:
+            return
+        timer_unit = f"{job_unit_basename(self._current_job)}.timer"
+        status = show_timer_status(timer_unit)
+        self._schedule_status_label.setText(
+            self._format_timer_status(self._current_job, status)
+        )
 
     # ---- Job-CRUD ----------------------------------------------------
 
@@ -194,6 +279,7 @@ class MainWindow(QMainWindow):
         if dlg.exec() and (job := dlg.accepted_job()):
             self._config.upsert_job(job)
             self._persist()
+            self._sync_schedule_for(job)
             self._refresh_jobs()
             log.info("Job '%s' angelegt", job.name)
 
@@ -204,20 +290,76 @@ class MainWindow(QMainWindow):
         if dlg.exec() and (job := dlg.accepted_job()):
             self._config.upsert_job(job)
             self._persist()
+            self._sync_schedule_for(job)
             self._refresh_jobs()
+            self._refresh_schedule_status()
             log.info("Job '%s' aktualisiert", job.name)
 
     def _on_delete_job(self) -> None:
         if not self._current_job:
             return
-        name = self._current_job.name
-        if QMessageBox.question(self, "Job löschen", f"Job '{name}' wirklich löschen?") != QMessageBox.StandardButton.Yes:
+        job = self._current_job
+        if QMessageBox.question(self, "Job löschen", f"Job '{job.name}' wirklich löschen?") != QMessageBox.StandardButton.Yes:
             return
-        self._config.remove_job(self._current_job.id)
+        self._remove_schedule_for(job)
+        self._config.remove_job(job.id)
         self._persist()
         self._current_job = None
         self._refresh_jobs()
-        log.info("Job '%s' gelöscht", name)
+        log.info("Job '%s' gelöscht", job.name)
+
+    # ---- Schedule-Sync -----------------------------------------------
+
+    def _sync_schedule_for(self, job: Job) -> None:
+        """Schreibt/aktualisiert oder entfernt Unit-Files für den Job.
+
+        Fehler werden geloggt und dem User gemeldet — die Config-Änderung
+        bleibt aber bestehen.
+        """
+        on_calendar = job.schedule.to_on_calendar()
+        timer_unit = f"{job_unit_basename(job)}.timer"
+
+        if on_calendar is None:
+            self._remove_schedule_for(job)
+            return
+
+        try:
+            write_units(job, on_calendar)
+        except OSError as exc:
+            QMessageBox.warning(
+                self, "Unit-Dateien", f"Konnte Unit-Files nicht schreiben: {exc}"
+            )
+            return
+
+        if not is_systemctl_available():
+            QMessageBox.information(
+                self,
+                "systemctl fehlt",
+                "Die .service- und .timer-Dateien wurden geschrieben, aber "
+                "`systemctl` ist nicht im PATH — der Timer muss manuell aktiviert "
+                "werden.",
+            )
+            return
+        try:
+            daemon_reload()
+            enable_timer(timer_unit, now=True)
+            log.info("Timer aktiviert: %s (OnCalendar=%s)", timer_unit, on_calendar)
+        except SystemctlError as exc:
+            QMessageBox.warning(self, "Timer-Aktivierung fehlgeschlagen", str(exc))
+
+    def _remove_schedule_for(self, job: Job) -> None:
+        timer_unit = f"{job_unit_basename(job)}.timer"
+        if is_systemctl_available():
+            try:
+                disable_timer(timer_unit, now=True)
+            except SystemctlError as exc:
+                log.warning("disable_timer fehlgeschlagen: %s", exc)
+        s_existed, t_existed = remove_units(job)
+        if (s_existed or t_existed) and is_systemctl_available():
+            try:
+                daemon_reload()
+            except SystemctlError as exc:
+                log.warning("daemon-reload fehlgeschlagen: %s", exc)
 
     def _persist(self) -> None:
         save_config(self._config, self._paths.config_file)
@@ -323,7 +465,10 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Backup '{job.name}' läuft…")
 
         sources = [Path(s) for s in job.sources]
-        worker = BackupWorker(runner, sources, tags=job.tags, excludes=job.excludes)
+        retention = job.retention.to_forget_policy() if job.auto_prune else None
+        worker = BackupWorker(
+            runner, sources, tags=job.tags, excludes=job.excludes, retention=retention
+        )
         thread = QThread(self)
         worker.moveToThread(thread)
 

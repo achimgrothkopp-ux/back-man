@@ -1,6 +1,15 @@
 import pytest
 
-from backman.config import AppConfig, Job, LocalTarget, load_config, save_config
+from backman.config import (
+    AppConfig,
+    Job,
+    LocalTarget,
+    RetentionPolicy,
+    Schedule,
+    ScheduleKind,
+    load_config,
+    save_config,
+)
 
 
 def _job(name="Daily", source="/home/u/docs", target_path="/mnt/backup"):
@@ -71,3 +80,114 @@ def test_save_is_atomic_no_tmp_leftover(tmp_path):
     assert cfg_path.exists()
     leftovers = list(tmp_path.glob("*.tmp"))
     assert leftovers == []
+
+
+# ---- Retention -----------------------------------------------------
+
+
+def test_retention_inactive_by_default():
+    r = RetentionPolicy()
+    assert r.is_active() is False
+    assert r.to_forget_policy() is None
+
+
+def test_retention_to_forget_policy_drops_zeros():
+    r = RetentionPolicy(keep_daily=7, keep_weekly=4, keep_yearly=0)
+    fp = r.to_forget_policy()
+    args = fp.to_args()
+    assert "--keep-daily" in args and "7" in args
+    assert "--keep-weekly" in args and "4" in args
+    assert "--keep-yearly" not in args
+
+
+# ---- Schedule ------------------------------------------------------
+
+
+def test_schedule_manual_returns_none():
+    s = Schedule(kind=ScheduleKind.MANUAL)
+    assert s.to_on_calendar() is None
+
+
+def test_schedule_daily_oncalendar():
+    s = Schedule(kind=ScheduleKind.DAILY, time="03:30")
+    assert s.to_on_calendar() == "*-*-* 03:30:00"
+
+
+def test_schedule_weekly_oncalendar():
+    s = Schedule(kind=ScheduleKind.WEEKLY, day_of_week="Sun", time="21:15")
+    assert s.to_on_calendar() == "Sun *-*-* 21:15:00"
+
+
+def test_schedule_custom_passthrough():
+    s = Schedule(kind=ScheduleKind.CUSTOM, custom_on_calendar="*-*-01 04:00:00")
+    assert s.to_on_calendar() == "*-*-01 04:00:00"
+
+
+def test_schedule_custom_empty_returns_none():
+    s = Schedule(kind=ScheduleKind.CUSTOM, custom_on_calendar="   ")
+    assert s.to_on_calendar() is None
+
+
+def test_schedule_rejects_bad_time():
+    with pytest.raises(ValueError):
+        Schedule(kind=ScheduleKind.DAILY, time="3:30")
+    with pytest.raises(ValueError):
+        Schedule(kind=ScheduleKind.DAILY, time="25:00")
+
+
+def test_schedule_rejects_bad_day():
+    with pytest.raises(ValueError):
+        Schedule(kind=ScheduleKind.WEEKLY, day_of_week="Funday")
+
+
+def test_job_defaults_include_retention_and_schedule():
+    j = _job()
+    assert j.retention.is_active() is False
+    assert j.schedule.kind is ScheduleKind.MANUAL
+    assert j.auto_prune is False
+
+
+def test_old_config_still_loads_with_defaults(tmp_path):
+    """Backward-Compat: TOMLs ohne retention/schedule müssen weiter laden."""
+    cfg_path = tmp_path / "old.toml"
+    cfg_path.write_text(
+        """\
+[[jobs]]
+id = "abc"
+name = "Old"
+sources = ["/x"]
+tags = []
+excludes = []
+
+[jobs.target]
+kind = "local"
+path = "/y"
+""",
+        encoding="utf-8",
+    )
+    cfg = load_config(cfg_path)
+    assert len(cfg.jobs) == 1
+    assert cfg.jobs[0].schedule.kind is ScheduleKind.MANUAL
+    assert cfg.jobs[0].retention.is_active() is False
+    assert cfg.jobs[0].auto_prune is False
+
+
+def test_full_roundtrip_with_retention_and_schedule(tmp_path):
+    cfg_path = tmp_path / "c.toml"
+    j = Job(
+        name="Full",
+        sources=["/src"],
+        target=LocalTarget(path="/dst"),
+        retention=RetentionPolicy(keep_daily=7, keep_weekly=4, keep_monthly=6),
+        auto_prune=True,
+        schedule=Schedule(kind=ScheduleKind.DAILY, time="04:15"),
+    )
+    save_config(AppConfig(jobs=[j]), cfg_path)
+
+    loaded = load_config(cfg_path)
+    j2 = loaded.jobs[0]
+    assert j2.retention.keep_daily == 7
+    assert j2.auto_prune is True
+    assert j2.schedule.kind is ScheduleKind.DAILY
+    assert j2.schedule.time == "04:15"
+    assert j2.schedule.to_on_calendar() == "*-*-* 04:15:00"

@@ -248,6 +248,19 @@ class ResticRunner:
             args.append("--prune")
         self._run(args, timeout=None)
 
+    def forget_snapshot(self, snapshot_id: str, *, prune: bool = True) -> None:
+        """Löscht einen einzelnen Snapshot anhand seiner ID.
+
+        prune defaultet auf True, weil der Nutzer beim Löschen normalerweise
+        erwartet, dass die Daten auch tatsächlich vom Speicher verschwinden.
+        """
+        if not snapshot_id:
+            raise ValueError("snapshot_id darf nicht leer sein")
+        args = ["forget", snapshot_id]
+        if prune:
+            args.append("--prune")
+        self._run(args, timeout=None)
+
     def prune(self) -> None:
         self._run(["prune"], timeout=None)
 

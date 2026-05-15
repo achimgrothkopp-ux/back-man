@@ -156,3 +156,21 @@ def test_wrong_password_still_distinct_from_missing(tmp_path):
     bad = ResticRunner(local_repo(repo), password="wrong")
     with pytest.raises(WrongPasswordError):
         bad.is_initialized()
+
+
+def test_forget_snapshot_removes_only_that_snapshot(runner, source_tree):
+    runner.init()
+    first = runner.backup([source_tree])
+    (source_tree / "another.txt").write_text("v2", encoding="utf-8")
+    second = runner.backup([source_tree])
+    assert len({first.snapshot_id, second.snapshot_id}) == 2
+
+    runner.forget_snapshot(first.snapshot_id, prune=True)
+    remaining = runner.snapshots()
+    assert len(remaining) == 1
+    assert remaining[0].id == second.snapshot_id
+
+
+def test_forget_snapshot_rejects_empty_id(runner):
+    with pytest.raises(ValueError):
+        runner.forget_snapshot("")

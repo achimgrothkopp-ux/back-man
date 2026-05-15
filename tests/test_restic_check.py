@@ -3,8 +3,8 @@ from unittest import mock
 
 import pytest
 
-from backupmanager import restic_check
-from backupmanager.restic_check import ResticNotFoundError, find_restic
+from backman import restic_check
+from backman.restic_check import ResticNotFoundError, find_restic
 
 
 def test_find_restic_raises_when_missing(monkeypatch):

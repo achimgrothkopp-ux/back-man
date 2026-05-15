@@ -1,6 +1,7 @@
 from pathlib import Path
 
-from backupmanager.paths import APP_NAME, get_paths
+from backman import APP_NAME
+from backman.paths import get_paths
 
 
 def test_get_paths_uses_xdg_env(monkeypatch, tmp_path):

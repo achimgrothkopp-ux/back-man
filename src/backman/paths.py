@@ -6,7 +6,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-APP_NAME = "backupmanager"
+from . import APP_NAME
 
 
 def _xdg(env_var: str, default_subpath: str) -> Path:

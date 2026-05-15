@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import sys
 
-from . import __version__
+from . import APP_DISPLAY_NAME, __version__
 from .logging_setup import setup_logging
 from .paths import get_paths
 from .restic_check import ResticNotFoundError, find_restic
@@ -16,9 +16,9 @@ def main(argv: list[str] | None = None) -> int:
     paths.ensure()
 
     setup_logging(paths.log_dir)
-    log = logging.getLogger("backupmanager")
+    log = logging.getLogger("backman")
 
-    log.info("Backup-Manager %s startet", __version__)
+    log.info("%s %s startet", APP_DISPLAY_NAME, __version__)
     log.info("Config: %s", paths.config_file)
     log.info("Logs:   %s", paths.log_dir)
 

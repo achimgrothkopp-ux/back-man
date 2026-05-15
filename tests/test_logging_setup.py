@@ -1,6 +1,6 @@
 import logging
 
-from backupmanager.logging_setup import setup_logging
+from backman.logging_setup import setup_logging
 
 
 def test_setup_logging_writes_file_and_queue(tmp_path):

@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "backupmanager"
+name = "back-man"
 version = "0.1.0"
-description = "Qt-basierter Backup-Manager für Linux auf Basis von restic"
+description = "Back-Man — Qt-basierter Backup-Manager für Linux auf Basis von restic"
 requires-python = ">=3.11"
 authors = [{ name = "Achim Grothkopp", email = "achimgrothkopp@gmail.com" }]
 license = { text = "MIT" }
@@ -22,7 +22,7 @@ dev = [
 ]
 
 [project.scripts]
-backupmanager = "backupmanager.__main__:main"
+back-man = "backman.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

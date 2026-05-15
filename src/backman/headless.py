@@ -12,7 +12,7 @@ import logging
 import sys
 from pathlib import Path
 
-from . import APP_DISPLAY_NAME, __version__, keyring_store
+from . import APP_DISPLAY_NAME, __version__, keyring_store, notifications
 from .config import Job, load_config
 from .engine import ResticRunner, WrongPasswordError
 from .logging_setup import setup_logging
@@ -83,9 +83,16 @@ def run_job_headless(job_id: str) -> int:
         )
     except WrongPasswordError as exc:
         log.error("Falsches Passwort für %s: %s", repo_url, exc)
+        notifications.notify_failure(
+            f"Backup '{job.name}' fehlgeschlagen",
+            "Falsches Passwort für Repository.",
+        )
         return EXIT_WRONG_PASSWORD
     except Exception as exc:  # noqa: BLE001
         log.exception("Backup fehlgeschlagen: %s", exc)
+        notifications.notify_failure(
+            f"Backup '{job.name}' fehlgeschlagen", str(exc)[:200]
+        )
         return EXIT_BACKUP_FAILED
 
     log.info(
@@ -94,6 +101,11 @@ def run_job_headless(job_id: str) -> int:
         summary.files_new,
         summary.files_changed,
         summary.data_added,
+    )
+    notifications.notify_success(
+        f"Backup '{job.name}' fertig",
+        f"Snapshot {summary.snapshot_id[:8]} — {summary.files_new} neu, "
+        f"+{summary.data_added / 1_000_000:.2f} MB",
     )
 
     # Optional: Retention

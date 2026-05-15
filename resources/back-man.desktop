@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Back-Man
+GenericName=Backup-Manager
+Comment=Qt-basierter Backup-Manager auf Basis von restic
+Exec=back-man
+Icon=drive-harddisk
+Terminal=false
+Categories=System;Utility;Archiving;
+Keywords=backup;restic;snapshot;
+StartupNotify=true

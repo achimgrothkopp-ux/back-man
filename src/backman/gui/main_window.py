@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import APP_DISPLAY_NAME, __version__
+from .. import notifications
 from ..config import AppConfig, Job, LocalTarget, ScheduleKind, load_config, save_config
 from ..engine import (
     ProgressEvent,
@@ -55,6 +56,8 @@ from .log_panel import LogDock
 from .password import forget_password, get_or_prompt_password, prompt_new_password
 from .restore_dialog import RestoreDialog
 from .snapshots_panel import SnapshotsPanel
+from .tray import TrayIcon, is_tray_available
+from .usb_watcher import UsbWatcher
 
 log = logging.getLogger(__name__)
 
@@ -81,6 +84,21 @@ class MainWindow(QMainWindow):
 
         self._log_dock = LogDock(log_sink, parent=self)
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self._log_dock)
+
+        # Tray-Icon (Hauptfenster minimiert beim Schließen ins Tray)
+        self._tray: TrayIcon | None = None
+        self._allow_quit = False  # wird auf True gesetzt, wenn echter Quit gewünscht
+        if is_tray_available():
+            self._tray = TrayIcon(APP_DISPLAY_NAME, parent=self)
+            self._tray.show_requested.connect(self._restore_from_tray)
+            self._tray.quit_requested.connect(self._quit_from_tray)
+            self._tray.show()
+        else:
+            log.info("System-Tray nicht verfügbar — Close schließt die Anwendung normal")
+
+        # USB-Watcher
+        self._usb_watcher = UsbWatcher(parent=self)
+        self._usb_watcher.mount_appeared.connect(self._on_mount_appeared)
 
         self._refresh_jobs()
         log.info("Hauptfenster bereit. %d Jobs geladen.", len(self._config.jobs))
@@ -510,6 +528,12 @@ class MainWindow(QMainWindow):
             f"+{summary.data_added / 1_000_000:.2f} MB"
         )
         self.statusBar().showMessage("Backup abgeschlossen.", 5000)
+        job_name = self._current_job.name if self._current_job else "?"
+        notifications.notify_success(
+            f"Backup '{job_name}' fertig",
+            f"Snapshot {summary.snapshot_id[:8]} — {summary.files_new} neu, "
+            f"+{summary.data_added / 1_000_000:.2f} MB",
+        )
         # Snapshot-Liste automatisch nachladen (kein neuer Passwort-Prompt — Keyring)
         if self._current_job is not None:
             self._on_refresh_snapshots()
@@ -521,6 +545,8 @@ class MainWindow(QMainWindow):
                 forget_password(self._current_job.target.repo_url)
         QMessageBox.critical(self, "Backup fehlgeschlagen", message)
         self.statusBar().showMessage("Backup fehlgeschlagen.", 5000)
+        job_name = self._current_job.name if self._current_job else "?"
+        notifications.notify_failure(f"Backup '{job_name}' fehlgeschlagen", message[:200])
 
     def _on_backup_thread_finished(self) -> None:
         self._worker = None
@@ -669,3 +695,55 @@ class MainWindow(QMainWindow):
         self._task_thread = None
         self._snapshots_panel.set_busy(False)
         self._run_btn.setEnabled(self._current_job is not None)
+
+    # ---- Tray + USB --------------------------------------------------
+
+    def closeEvent(self, event) -> None:  # type: ignore[override]
+        """Wenn ein Tray vorhanden ist: Fenster minimieren statt schließen.
+
+        So bleibt der USB-Watcher aktiv und Timer-Notifications kommen
+        weiter durch. Echter Quit nur über das Tray-Menü oder File → Quit.
+        """
+        if self._tray and not self._allow_quit:
+            self.hide()
+            event.ignore()
+            # Einmalig im Statusbar-Stil als Hinweis
+            self._tray._tray.showMessage(
+                APP_DISPLAY_NAME,
+                "Läuft im Hintergrund weiter. Über das Tray-Icon zurückholen.",
+                msecs=4000,
+            )
+            return
+        super().closeEvent(event)
+
+    def _restore_from_tray(self) -> None:
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
+    def _quit_from_tray(self) -> None:
+        self._allow_quit = True
+        if self._tray:
+            self._tray.hide()
+        self.close()
+        from PySide6.QtWidgets import QApplication
+
+        app = QApplication.instance()
+        if app is not None:
+            app.quit()
+
+    def _on_mount_appeared(self, mount_path: str) -> None:
+        """Prüft, ob ein Job-Ziel unter dem neuen Mount liegt, und informiert."""
+        mount = Path(mount_path).resolve()
+        for job in self._config.jobs:
+            target = Path(job.target.repo_url).resolve()
+            try:
+                target.relative_to(mount)
+            except ValueError:
+                continue
+            log.info("Job-Ziel auf neuem Mount erkannt: %s (Job '%s')", target, job.name)
+            notifications.notify(
+                f"Back-Man: Ziel-Laufwerk verfügbar",
+                f"Job '{job.name}': Ziel {target} ist gemountet. "
+                "Du kannst jetzt das Backup starten.",
+            )

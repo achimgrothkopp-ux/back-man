@@ -9,7 +9,7 @@ def test_setup_logging_writes_file_and_queue(tmp_path):
     log = logging.getLogger("test.logger")
     log.info("hallo backup")
 
-    logfile = tmp_path / "backupmanager.log"
+    logfile = tmp_path / "backman.log"
     assert logfile.exists()
     content = logfile.read_text(encoding="utf-8")
     assert "hallo backup" in content

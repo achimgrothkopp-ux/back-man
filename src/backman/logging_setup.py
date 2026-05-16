@@ -50,7 +50,7 @@ class _QueueHandler(logging.Handler):
 
 def setup_logging(log_dir: Path, level: int = logging.INFO) -> GuiLogQueue:
     log_dir.mkdir(parents=True, exist_ok=True)
-    logfile = log_dir / "backupmanager.log"
+    logfile = log_dir / "backman.log"
 
     formatter = logging.Formatter(LOG_FORMAT, DATE_FORMAT)
 

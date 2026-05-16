@@ -24,8 +24,8 @@ Mint- und Ubuntu-Versionen).
 sudo apt remove back-man
 ```
 
-Konfiguration und Logs bleiben in `~/.config/back-man/` und
-`~/.local/share/back-man/` erhalten.
+Konfiguration und Logs bleiben in `~/.config/backman/` und
+`~/.local/share/backman/` erhalten.
 
 ---
 

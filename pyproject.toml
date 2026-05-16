@@ -9,6 +9,7 @@ description = "Back-Man — Qt-basierter Backup-Manager für Linux auf Basis von
 requires-python = ">=3.10"
 authors = [{ name = "Achim Grothkopp", email = "achimgrothkopp@gmail.com" }]
 license = { text = "MIT" }
+readme = "README.md"
 dependencies = [
     "PySide6>=6.6",
     "keyring>=24",

@@ -4,7 +4,7 @@ Alle nennenswerten Änderungen an Back-Man stehen hier. Das Format orientiert
 sich an [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 die Versionsnummerierung folgt [Semantic Versioning](https://semver.org/lang/de/).
 
-## [Unveröffentlicht]
+## [0.1.1] — 2026-06-24
 
 ### Behoben
 

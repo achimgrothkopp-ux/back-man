@@ -4,6 +4,22 @@ Alle nennenswerten Änderungen an Back-Man stehen hier. Das Format orientiert
 sich an [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 die Versionsnummerierung folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [Unveröffentlicht]
+
+### Behoben
+
+- **Gesperrtes Repository blockierte Snapshot-Löschen u. a. Vorgänge:** Eine
+  zurückgebliebene restic-Sperre (z. B. nach einem abgebrochenen Vorgang oder
+  einem zu früh entfernten Laufwerk) führte zu `RepoLockedError (rc=11)` ohne
+  Auswegmöglichkeit in der GUI.
+
+### Hinzugefügt
+
+- **`ResticRunner.unlock(remove_all=False)`** kapselt `restic unlock`.
+- **GUI: automatische Sperren-Behandlung.** Bei `RepoLockedError` bietet
+  Back-Man an, die Sperre aufzuheben und den fehlgeschlagenen Vorgang einmalig
+  zu wiederholen (mit Schutz gegen Endlosschleifen).
+
 ## [0.1.0] — 2026-05-16
 
 Erste veröffentlichte Version. Funktional vollständig für den

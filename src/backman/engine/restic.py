@@ -264,6 +264,21 @@ class ResticRunner:
     def prune(self) -> None:
         self._run(["prune"], timeout=None)
 
+    def unlock(self, *, remove_all: bool = False) -> None:
+        """Entfernt zurückgebliebene Locks aus dem Repository.
+
+        Ohne `remove_all` löscht restic nur *stale* Locks (deren erzeugender
+        Prozess nachweislich nicht mehr läuft) — das ist der sichere Fall nach
+        einem Absturz oder zu früh entferntem Laufwerk. `remove_all=True` löscht
+        auch nicht-stale Locks und ist nur nötig, wenn kein anderer
+        restic-/backman-Vorgang gleichzeitig läuft.
+        """
+        args = ["unlock"]
+        if remove_all:
+            args.append("--remove-all")
+        self._run(args, timeout=60)
+        log.info("Repository entsperrt (remove_all=%s): %s", remove_all, self.repo.url)
+
     def check(self) -> bool:
         self._run(["check"], timeout=None)
         return True

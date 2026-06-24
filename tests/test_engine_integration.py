@@ -174,3 +174,13 @@ def test_forget_snapshot_removes_only_that_snapshot(runner, source_tree):
 def test_forget_snapshot_rejects_empty_id(runner):
     with pytest.raises(ValueError):
         runner.forget_snapshot("")
+
+
+def test_unlock_is_noop_on_unlocked_repo(runner, source_tree):
+    """unlock() darf auf einem nicht gesperrten Repo problemlos durchlaufen."""
+    runner.init()
+    runner.backup([source_tree])
+    runner.unlock()  # keine stale locks → kein Fehler
+    runner.unlock(remove_all=True)
+    # Repo weiterhin nutzbar
+    assert len(runner.snapshots()) == 1

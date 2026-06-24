@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import Qt, QThread
+from PySide6.QtCore import Qt, QThread, QTimer
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -74,6 +74,16 @@ class MainWindow(QMainWindow):
         self._worker: BackupWorker | None = None
         self._task_thread: QThread | None = None
         self._task_worker: EngineTaskWorker | None = None
+        # Kontext der zuletzt gestarteten Engine-Task, um sie nach dem Aufheben
+        # einer Repo-Sperre wiederholen zu können.
+        TaskCtx = tuple[str, ResticRunner, Callable[[], object],
+                        Callable[[object], None] | None]
+        self._last_task: TaskCtx | None = None
+        # Task, die nach erfolgreichem Unlock wiederholt werden soll.
+        self._pending_retry: TaskCtx | None = None
+        # Verhindert eine Endlosschleife, falls auch nach dem Unlock noch
+        # eine Sperre gemeldet wird.
+        self._unlock_retried = False
 
         self.setWindowTitle(f"{APP_DISPLAY_NAME} {__version__}")
         self.resize(1040, 680)
@@ -665,6 +675,9 @@ class MainWindow(QMainWindow):
         action: Callable[[], object],
         on_success: Callable[[object], None] | None = None,
     ) -> None:
+        # Kontext merken, damit wir die Task nach einem Unlock wiederholen können.
+        self._last_task = (name, runner, action, on_success)
+
         worker = EngineTaskWorker(name, action)
         thread = QThread(self)
         worker.moveToThread(thread)
@@ -684,11 +697,90 @@ class MainWindow(QMainWindow):
 
     def _on_task_failed(self, name: str, message: str) -> None:
         log.error("%s fehlgeschlagen: %s", name, message)
-        if "passwort" in message.lower() or "wrong password" in message.lower():
+        lower = message.lower()
+        if "passwort" in lower or "wrong password" in lower:
             if self._current_job:
                 forget_password(self._current_job.target.repo_url)
+        elif ("gesperrt" in lower or "rc=11" in lower or "locked" in lower) \
+                and name != "unlock":
+            # Repo durch eine zurückgebliebene Sperre blockiert — anbieten,
+            # sie aufzuheben und den Vorgang zu wiederholen.
+            self._offer_unlock_and_retry()
+            return
         QMessageBox.critical(self, f"{name} fehlgeschlagen", message)
         self.statusBar().showMessage(f"{name} fehlgeschlagen.", 5000)
+
+    def _offer_unlock_and_retry(self) -> None:
+        """Fragt nach, ob eine zurückgebliebene Repo-Sperre aufgehoben werden soll."""
+        task = self._last_task
+        if task is None:
+            return
+
+        if self._unlock_retried:
+            # Wir haben bereits einmal entsperrt und es ist erneut gesperrt —
+            # nicht weiter automatisch versuchen.
+            self._unlock_retried = False
+            QMessageBox.critical(
+                self,
+                "Repository weiterhin gesperrt",
+                "Das Repository ist trotz Entsperren noch gesperrt. Läuft evtl. "
+                "ein anderes Backup gleichzeitig? Bitte später erneut versuchen.",
+            )
+            self.statusBar().showMessage("Repository weiterhin gesperrt.", 5000)
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Repository gesperrt",
+            "Das Repository ist durch eine zurückgebliebene Sperre blockiert — "
+            "typischerweise von einem abgebrochenen Vorgang oder einem zu früh "
+            "entfernten Laufwerk.\n\nSperre jetzt aufheben und den Vorgang "
+            "wiederholen?",
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            self.statusBar().showMessage("Vorgang abgebrochen (Repo gesperrt).", 5000)
+            return
+
+        # Erst ausführen, wenn der Thread der fehlgeschlagenen Task aufgeräumt
+        # ist (done-Signal kommt nach failed) — sonst kollidieren die Worker.
+        QTimer.singleShot(0, self._do_unlock_and_retry)
+
+    def _do_unlock_and_retry(self) -> None:
+        task = self._last_task
+        if task is None or self._is_busy():
+            return
+        _name, runner, _action, _on_success = task
+        self._unlock_retried = True
+        self._pending_retry = task
+        self._snapshots_panel.set_busy(True, "Sperre wird aufgehoben…")
+        self.statusBar().showMessage("Sperre wird aufgehoben…")
+
+        # Nach dem Unlock die ursprüngliche Task wiederholen — aber erst, wenn
+        # der Unlock-Thread vollständig aufgeräumt ist (deshalb singleShot).
+        self._run_engine_task(
+            name="unlock",
+            runner=runner,
+            action=runner.unlock,
+            on_success=lambda _r: QTimer.singleShot(0, self._run_pending_retry),
+        )
+
+    def _run_pending_retry(self) -> None:
+        task = self._pending_retry
+        self._pending_retry = None
+        if task is None or self._is_busy():
+            return
+        name, runner, action, on_success = task
+        self.statusBar().showMessage("Sperre aufgehoben — wiederhole Vorgang…", 3000)
+
+        def on_retry_ok(result: object) -> None:
+            self._unlock_retried = False  # erfolgreich → Schutz zurücksetzen
+            if on_success is not None:
+                on_success(result)
+
+        self._snapshots_panel.set_busy(True, f"{name} wird wiederholt…")
+        self._run_engine_task(
+            name=name, runner=runner, action=action, on_success=on_retry_ok
+        )
 
     def _on_task_thread_finished(self) -> None:
         self._task_worker = None
